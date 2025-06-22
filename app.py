@@ -1,10 +1,42 @@
 import streamlit as st
-import boto3
+import anthropic
 import json
+import toml
+from pathlib import Path
+from typing import List, Optional
+import traceback
 
-# === AWS Bedrock Setup ===
-bedrock = boto3.client("bedrock-runtime", region_name="ap-south-1")
-inference_profile_arn = "arn:aws:bedrock:ap-south-1:069717477936:inference-profile/apac.amazon.nova-micro-v1:0"
+# Configure page
+st.set_page_config(
+    page_title="INLAW Research Lens Selector",
+    page_icon="🔍",
+    layout="wide"
+)
+
+# === API Key Setup ===
+@st.cache_resource
+def get_api_key():
+    try:
+        # Look for .env file in current directory
+        env_path = Path(".env")
+        if env_path.exists():
+            env_content = toml.load(env_path)
+            api_key = env_content.get("anthropic", {}).get("api_key")
+            if api_key and api_key.strip():
+                return api_key.strip()
+    except Exception as e:
+        st.error(f"Error reading .env as TOML: {e}")
+    
+    raise Exception("API key not found in .env file")
+
+# Initialize Anthropic client
+@st.cache_resource
+def get_anthropic_client():
+    try:
+        return anthropic.Client(api_key=get_api_key())
+    except Exception as e:
+        st.error(f"Failed to initialize Anthropic client: {e}")
+        return None
 
 # === Startup Stages Configuration ===
 STARTUP_STAGES = {
@@ -67,7 +99,7 @@ STARTUP_STAGES = {
 }
 
 # === Enhanced Prompt Builder ===
-def build_prompt(title, description, tags, stage):
+def build_prompt(title: str, description: str, tags: List[str], stage: str):
     stage_info = STARTUP_STAGES.get(stage, {})
     key_questions = stage_info.get("key_questions", [])
     focus_areas = stage_info.get("focus_areas", [])
@@ -75,228 +107,333 @@ def build_prompt(title, description, tags, stage):
     # Create stage-specific context for AI
     stage_context = ""
     if stage == "IDEATION & PLANNING":
-        stage_context = "Early stage focusing on idea validation, market research, and planning. Prioritize methods that help validate core assumptions and understand market needs."
+        stage_context = """Early stage focusing on idea validation, market research, and planning. 
+        At this stage, you need to validate core assumptions and understand market needs. 
+        SME insights help validate technical feasibility, Peer insights provide business model validation,
+        Survey helps quantify market demand, Social reveals organic market conversations."""
     elif stage == "PROTOTYPE DEVELOPMENT":
-        stage_context = "Building MVP stage focusing on product development and team coordination. Prioritize methods that provide technical validation and user experience feedback."
+        stage_context = """Building MVP stage focusing on product development and team coordination. 
+        At this stage, you need technical validation and user experience feedback.
+        SME insights crucial for technical decisions, Peer insights for development best practices,
+        Survey for feature prioritization, Social for competitive analysis."""
     elif stage == "VALIDATION & ITERATION":
-        stage_context = "Testing and refining stage focusing on user feedback and usability. Prioritize methods that provide direct user insights and iteration guidance."
+        stage_context = """Testing and refining stage focusing on user feedback and usability. 
+        At this stage, direct user insights and iteration guidance are critical.
+        Survey and Social become more valuable for user feedback, SME for technical optimization,
+        Peer for scaling challenges."""
     elif stage == "LAUNCH & SCALING":
-        stage_context = "Go-to-market stage focusing on customer acquisition and scaling. Prioritize methods that provide market strategy and growth insights."
+        stage_context = """Go-to-market stage focusing on customer acquisition and scaling. 
+        At this stage, market strategy and growth insights are paramount.
+        Peer insights for go-to-market strategies, Survey for pricing/positioning,
+        Social for brand awareness, SME for operational scaling."""
     elif stage == "GROWTH & OPTIMIZATION":
-        stage_context = "Mature scaling stage focusing on optimization and expansion. Prioritize methods that provide competitive intelligence and growth optimization insights."
-    
-    # Industry/domain analysis
-    domain_context = ""
-    tag_string = ', '.join(tags).lower()
-    if any(tech in tag_string for tech in ['ai', 'ml', 'tech', 'software', 'app']):
-        domain_context = "Tech domain - SME and Peer insights often most valuable for technical validation."
-    elif any(health in tag_string for health in ['health', 'medical', 'healthcare']):
-        domain_context = "Healthcare domain - SME insights critical for regulatory and safety considerations."
-    elif any(consumer in tag_string for consumer in ['b2c', 'consumer', 'retail']):
-        domain_context = "Consumer domain - Survey and Social insights valuable for understanding user preferences."
-    elif any(b2b in tag_string for b2b in ['b2b', 'enterprise', 'business']):
-        domain_context = "B2B domain - SME and Peer insights crucial for understanding business needs."
-    
-    return f"""
-Analyze this startup and rank 4 research methods. Return ONLY valid JSON.
+        stage_context = """Mature scaling stage focusing on optimization and expansion. 
+        At this stage, competitive intelligence and growth optimization are key.
+        Survey for market expansion research, Social for competitive intelligence,
+        Peer for scaling strategies, SME for advanced optimizations."""
 
-Context:
+    return f"""
+You are an expert startup advisor with deep knowledge of research methodologies. Analyze this startup and determine which research method would provide the MOST actionable insights at this specific stage.
+
+STARTUP CONTEXT:
 - Title: {title}
 - Description: {description}
 - Tags: {', '.join(tags)}
-- Stage: {stage}
+- Current Stage: {stage}
 
-{stage_context}
-{domain_context}
+STAGE CONTEXT: {stage_context}
 
-Rank these 4 research lenses (1=best, 4=worst):
-- SME: Expert interviews
-- Peer: Founder conversations  
-- Survey: User questionnaires
-- Social: Social media analysis
+RESEARCH LENSES TO ANALYZE:
 
-Return exactly this JSON format:
+SME (Subject Matter Expert Research):
+- What: Direct interviews with domain experts, industry veterans, technical specialists, regulatory experts
+- Provides: Deep technical validation, industry standards, regulatory requirements, feasibility assessment
+- Best when: Complex technical challenges, regulated industries, specialized knowledge gaps, feasibility questions
+
+Peer (Peer-to-Peer Research):
+- What: Conversations with fellow entrepreneurs, startup founders, business leaders who've faced similar challenges
+- Provides: Business model validation, go-to-market strategies, operational insights, scaling experiences
+- Best when: Business strategy questions, operational challenges, fundraising, scaling decisions
+
+Survey (Quantitative Research):
+- What: Structured questionnaires to collect statistical data from target users/customers
+- Provides: Market size validation, feature prioritization, pricing insights, user preference quantification
+- Best when: Large addressable markets, consumer products, statistical validation needed, pricing decisions
+
+Social (Social Media Analysis):
+- What: Mining social platforms, forums, communities for organic conversations, sentiment, trends
+- Provides: Brand perception, competitive intelligence, market trends, organic user feedback
+- Best when: Consumer brands, trend-dependent products, competitive analysis, brand-sensitive markets
+
+CRITICAL RANKING LOGIC:
+
+For IDEATION & PLANNING stage:
+- If highly technical/regulated → SME likely most valuable
+- If business model unclear → Peer insights crucial
+- If large consumer market → Survey for demand validation
+- If trend/brand dependent → Social for market signals
+
+For PROTOTYPE DEVELOPMENT stage:
+- If technical complexity high → SME for development guidance
+- If user experience critical → Survey for user testing
+- If business model validation needed → Peer for strategy
+- If competitive landscape active → Social for positioning
+
+For VALIDATION & ITERATION stage:
+- If user feedback critical → Survey typically #1
+- If technical optimization needed → SME for advanced insights
+- If business model pivoting → Peer for strategic guidance
+- If market positioning unclear → Social for perception
+
+For LAUNCH & SCALING stage:
+- If go-to-market strategy unclear → Peer for execution insights
+- If market sizing needed → Survey for demand quantification
+- If brand building critical → Social for awareness strategies
+- If operational scaling → SME for infrastructure
+
+For GROWTH & OPTIMIZATION stage:
+- If competitive intelligence needed → Social for market dynamics
+- If expansion planning → Survey for new market validation
+- If operational optimization → SME for advanced systems
+- If strategic pivoting → Peer for scaling experiences
+
+RANKING REQUIREMENTS:
+1. Assign ranks 1-4 where 1 = most valuable, 4 = least valuable
+2. Each lens must have a UNIQUE rank (no ties)
+3. Rank based on which method provides the MOST ACTIONABLE insights for this specific startup at this stage
+4. Consider: stage needs + domain complexity + target market + business model + title specifics + description details + tag implications
+5. Rankings must vary significantly across different contexts - avoid defaulting to same patterns
+6. CRITICAL: Analyze the COMPLETE startup context (title + description + tags + stage) to determine rankings
+
+CONTEXT ANALYSIS REQUIREMENTS:
+- Analyze the startup TITLE for business model clues
+- Analyze the DESCRIPTION for technical complexity, target market, and value proposition
+- Analyze the TAGS for domain, technology stack, and market type
+- Analyze the STAGE for specific research needs at this phase
+- Combine ALL these factors to determine optimal research lens ranking
+
+Return ONLY a valid JSON array with this exact structure:
 [
-{{"lens":"SME","rank":1,"reason":"Brief reason","confidence":0.8,"confidenceBasis":"Brief basis","pros":["Pro 1","Pro 2"],"cons":["Con 1","Con 2"],"stageRelevance":0.9}},
-{{"lens":"Peer","rank":2,"reason":"Brief reason","confidence":0.7,"confidenceBasis":"Brief basis","pros":["Pro 1","Pro 2"],"cons":["Con 1","Con 2"],"stageRelevance":0.8}},
-{{"lens":"Survey","rank":3,"reason":"Brief reason","confidence":0.6,"confidenceBasis":"Brief basis","pros":["Pro 1","Pro 2"],"cons":["Con 1","Con 2"],"stageRelevance":0.7}},
-{{"lens":"Social","rank":4,"reason":"Brief reason","confidence":0.5,"confidenceBasis":"Brief basis","pros":["Pro 1","Pro 2"],"cons":["Con 1","Con 2"],"stageRelevance":0.6}}]
+  {{
+    "lens": "SME",
+    "rank": [1, 2, 3, or 4 - calculated based on value for this specific context],
+    "reason": "Brief explanation why this rank for this specific startup/stage considering title, description, tags, and stage",
+    "confidence": [0.1_TO_1.0],
+    "confidenceBasis": "Why you're confident/uncertain about this ranking",
+    "pros": ["Advantage 1 for this context", "Advantage 2 for this context"],
+    "cons": ["Limitation 1 for this context", "Limitation 2 for this context"],
+    "stageRelevance": [0.1_TO_1.0]
+  }},
+  {{
+    "lens": "Peer",
+    "rank": [1, 2, 3, or 4 - calculated based on value for this specific context],
+    "reason": "Brief explanation why this rank for this specific startup/stage considering title, description, tags, and stage",
+    "confidence": [0.1_TO_1.0],
+    "confidenceBasis": "Why you're confident/uncertain about this ranking",
+    "pros": ["Advantage 1 for this context", "Advantage 2 for this context"],
+    "cons": ["Limitation 1 for this context", "Limitation 2 for this context"],
+    "stageRelevance": [0.1_TO_1.0]
+  }},
+  {{
+    "lens": "Survey",
+    "rank": [1, 2, 3, or 4 - calculated based on value for this specific context],
+    "reason": "Brief explanation why this rank for this specific startup/stage considering title, description, tags, and stage",
+    "confidence": [0.1_TO_1.0],
+    "confidenceBasis": "Why you're confident/uncertain about this ranking",
+    "pros": ["Advantage 1 for this context", "Advantage 2 for this context"],
+    "cons": ["Limitation 1 for this context", "Limitation 2 for this context"],
+    "stageRelevance": [0.1_TO_1.0]
+  }},
+  {{
+    "lens": "Social",
+    "rank": [1, 2, 3, or 4 - calculated based on value for this specific context],
+    "reason": "Brief explanation why this rank for this specific startup/stage considering title, description, tags, and stage",
+    "confidence": [0.1_TO_1.0],
+    "confidenceBasis": "Why you're confident/uncertain about this ranking",
+    "pros": ["Advantage 1 for this context", "Advantage 2 for this context"],
+    "cons": ["Limitation 1 for this context", "Limitation 2 for this context"],
+    "stageRelevance": [0.1_TO_1.0]
+  }}
+]
+
+IMPORTANT: Analyze the specific context deeply and rank based on maximum actionable value. Different startups with different titles, descriptions, tags, and stages should get significantly different rankings. Rankings must be context-sensitive and vary meaningfully.
 """
 
-# === Nova Micro Call with JSON Cleanup ===
-def query_nova_micro(prompt_text):
-    body = {
-        "inferenceConfig": {
-            "max_new_tokens": 800,
-            "temperature": 0.3
-        },
-        "messages": [
-            {
-                "role": "user",
-                "content": [{"text": prompt_text}]
-            }
-        ]
-    }
-
-    response = bedrock.invoke_model_with_response_stream(
-        modelId=inference_profile_arn,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps(body)
-    )
-
-    output_string = ""
-    for event in response["body"]:
-        if "chunk" in event:
-            chunk = event["chunk"]["bytes"]
-            if chunk:
-                try:
-                    payload = json.loads(chunk.decode("utf-8"))
-                    delta = payload.get("contentBlockDelta", {}).get("delta", {}).get("text", "")
-                    output_string += delta
-                except Exception:
-                    continue
-    
-    # Clean up the output to extract JSON
-    output_string = output_string.strip()
-    
-    # Find JSON array in the response
-    start_idx = output_string.find('[')
-    end_idx = output_string.rfind(']') + 1
-    
-    if start_idx != -1 and end_idx != -1:
-        json_str = output_string[start_idx:end_idx]
-        # Fix common JSON issues
-        json_str = json_str.replace("'", '"')  # Replace single quotes
-        json_str = json_str.replace('True', 'true').replace('False', 'false')
-        return json_str
-    
-    return output_string
+# === Claude API Call ===
+def query_claude(prompt_text: str, client):
+    try:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1500,
+            temperature=0.4,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt_text
+                }
+            ]
+        )
+        
+        output_string = response.content[0].text.strip()
+        
+        # Find JSON array in the response
+        start_idx = output_string.find('[')
+        end_idx = output_string.rfind(']') + 1
+        
+        if start_idx != -1 and end_idx != -1:
+            json_str = output_string[start_idx:end_idx]
+            return json_str
+        
+        return output_string
+        
+    except Exception as e:
+        raise Exception(f"Claude API error: {str(e)}")
 
 # === Streamlit UI ===
-st.set_page_config(page_title="INLAW Lens Selector", page_icon="🔍", layout="wide")
-
-st.title("🔍 INLAW Research Lens Selector")
-st.markdown("*AI-powered research method recommendations for your startup stage*")
-
-# === Input Form ===
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    title = st.text_input("📌 **Startup Idea Title**", placeholder="e.g., AI-powered fitness coach app")
-    description = st.text_area("📝 **Idea Description**", 
-                              placeholder="Describe your startup idea, target market, and core value proposition...",
-                              height=100)
-    tags_input = st.text_input("🏷️ **Tags** (comma separated)", 
-                              placeholder="e.g., AI, fitness, mobile app, B2C")
-
-with col2:
-    stage = st.selectbox("📊 **Current Stage**", 
-                        options=list(STARTUP_STAGES.keys()),
-                        help="Select your current startup development stage")
+def main():
+    st.title("🔍 INLAW Research Lens Selector")
+    st.markdown("**Version 1.0.0** - Analyze your startup and get research lens recommendations")
     
-    # Display stage info
-    if stage:
-        stage_info = STARTUP_STAGES[stage]
-        st.markdown("**Stage Focus:**")
-        for area in stage_info["focus_areas"]:
-            st.markdown(f"• {area}")
-
-# === Stage-specific guidance removed ===
-
-# === Main Analysis ===
-if st.button("🚀 **Get Research Lens Recommendations**", type="primary") and title and description and tags_input and stage:
-    tags = [tag.strip() for tag in tags_input.split(",")]
-    prompt = build_prompt(title, description, tags, stage)
-
-    with st.spinner("⏳ Analyzing your startup context..."):
-        raw_output = query_nova_micro(prompt)
-
-    try:
-        # Try to parse the cleaned JSON
-        parsed = json.loads(raw_output)
+    # Initialize client
+    client = get_anthropic_client()
+    
+    if not client:
+        st.error("❌ Failed to initialize Anthropic client. Please check your .env file.")
+        st.stop()
+    
+    st.success("✅ Anthropic client initialized successfully")
+    
+    # Sidebar with stage information
+    st.sidebar.header("📊 Available Stages")
+    for stage, info in STARTUP_STAGES.items():
+        with st.sidebar.expander(stage):
+            st.write("**Key Questions:**")
+            for question in info["key_questions"][:3]:  # Show first 3 questions
+                st.write(f"• {question}")
+            st.write("**Focus Areas:**")
+            st.write(f"• {', '.join(info['focus_areas'])}")
+    
+    # Main form
+    st.header("🚀 Startup Analysis")
+    
+    with st.form("startup_form"):
+        col1, col2 = st.columns([2, 1])
         
-        # Validate we have 4 lens entries
-        if not isinstance(parsed, list) or len(parsed) != 4:
-            raise ValueError("Invalid response format")
-            
-        # Ensure all required fields exist
-        required_fields = ['lens', 'rank', 'reason', 'confidence', 'pros', 'cons']
-        for item in parsed:
-            for field in required_fields:
-                if field not in item:
-                    raise ValueError(f"Missing field: {field}")
+        with col1:
+            title = st.text_input("Startup Title", placeholder="Enter your startup title")
+            description = st.text_area(
+                "Description", 
+                placeholder="Describe your startup, its value proposition, and target market",
+                height=100
+            )
         
-        st.success("✅ **Personalized Research Lens Recommendations**")
-        st.markdown(f"*Optimized for {stage} stage*")
+        with col2:
+            stage = st.selectbox("Current Stage", list(STARTUP_STAGES.keys()))
+            tags_input = st.text_area(
+                "Tags (one per line)", 
+                placeholder="e.g.\nAI\nSaaS\nHealthtech",
+                height=100
+            )
         
-        # === Results Display ===
-        sorted_results = sorted(parsed, key=lambda x: x["rank"])
+        submitted = st.form_submit_button("🔍 Analyze Startup", use_container_width=True)
+    
+    if submitted:
+        # Validate inputs
+        if not title.strip():
+            st.error("❌ Title cannot be empty")
+            return
+        if not description.strip():
+            st.error("❌ Description cannot be empty")
+            return
+        if not tags_input.strip():
+            st.error("❌ Tags cannot be empty")
+            return
         
-        for item in sorted_results:
-            rank_emoji = ["🥇", "🥈", "🥉", "4️⃣"][item["rank"]-1]
-            
-            with st.container():
-                st.markdown(f"### {rank_emoji} {item['lens']} Research Lens")
+        # Process tags
+        tags = [tag.strip() for tag in tags_input.split('\n') if tag.strip()]
+        
+        if not tags:
+            st.error("❌ Please provide at least one tag")
+            return
+        
+        # Show analysis in progress
+        with st.spinner("🤖 Analyzing your startup with Claude..."):
+            try:
+                # Build prompt
+                prompt = build_prompt(title, description, tags, stage)
                 
-                col1, col2, col3 = st.columns([2, 1, 1])
+                # Query Claude
+                raw_output = query_claude(prompt, client)
                 
-                with col1:
-                    st.markdown(f"**Recommendation:** {item['reason']}")
-                
-                with col2:
-                    confidence_color = "green" if item['confidence'] > 0.7 else "orange" if item['confidence'] > 0.5 else "red"
-                    st.markdown(f"**Confidence:** :{confidence_color}[{item['confidence']:.1%}]")
+                # Parse JSON response
+                try:
+                    parsed = json.loads(raw_output)
                     
-                with col3:
-                    stage_relevance = item.get('stageRelevance', 0.5)
-                    relevance_color = "green" if stage_relevance > 0.7 else "orange" if stage_relevance > 0.5 else "red"
-                    st.markdown(f"**Stage Fit:** :{relevance_color}[{stage_relevance:.1%}]")
-                
-                # Pros and Cons
-                col_pros, col_cons = st.columns(2)
-                
-                with col_pros:
-                    st.markdown("**✅ Advantages:**")
-                    for pro in item["pros"]:
-                        st.markdown(f"• {pro}")
-                
-                with col_cons:
-                    st.markdown("**⚠️ Limitations:**")
-                    for con in item["cons"]:
-                        st.markdown(f"• {con}")
-                
-                st.markdown(f"*Confidence basis: {item['confidenceBasis']}*")
-                st.markdown("---")
-        
-        # === Next Steps ===
-        st.markdown("### 🎯 **Recommended Next Steps**")
-        top_lens = sorted_results[0]['lens']
-        st.info(f"**Start with {top_lens} research** - it's ranked #1 for your {stage} stage. "
-                f"Consider combining it with the #2 ranked method for comprehensive insights.")
-                
-    except Exception as e:
-        st.error("❌ **Failed to parse AI response**")
-        st.markdown("**Raw AI Output:**")
-        st.text_area("Debug Output", raw_output, height=300)
-        st.markdown(f"**Error:** {str(e)}")
+                    # Validate response format
+                    if not isinstance(parsed, list) or len(parsed) != 4:
+                        st.error("❌ Invalid response format - expected array of 4 items")
+                        return
+                        
+                    # Validate required fields
+                    required_fields = ['lens', 'rank', 'reason', 'confidence', 'pros', 'cons', 'stageRelevance']
+                    for item in parsed:
+                        for field in required_fields:
+                            if field not in item:
+                                st.error(f"❌ Missing field: {field}")
+                                return
+                    
+                    # Validate rankings are unique and 1-4
+                    ranks = [item['rank'] for item in parsed]
+                    if sorted(ranks) != [1, 2, 3, 4]:
+                        st.error("❌ Invalid rankings - must be unique values 1-4")
+                        return
+                    
+                    # Calculate summary
+                    avg_confidence = sum(item['confidence'] for item in parsed) / len(parsed)
+                    high_confidence_lenses = [item['lens'] for item in parsed if item['confidence'] > 0.7]
+                    top_lens = min(parsed, key=lambda x: x['rank'])['lens']
+                    
+                    summary = {
+                        "average_confidence": round(avg_confidence, 3),
+                        "high_confidence_lenses": high_confidence_lenses,
+                        "top_recommendation": top_lens,
+                        "stage": stage
+                    }
+                    
+                    # Create final result
+                    result = {
+                        "results": parsed,
+                        "summary": summary
+                    }
+                    
+                    # Display results
+                    st.success("✅ Analysis completed successfully!")
+                    
+                    # Display JSON output
+                    st.header("📋 Analysis Results (JSON)")
+                    st.json(result)
+                    
+                    # Option to download JSON
+                    st.download_button(
+                        label="💾 Download JSON Results",
+                        data=json.dumps(result, indent=2),
+                        file_name=f"research_lens_analysis_{title.replace(' ', '_')}.json",
+                        mime="application/json"
+                    )
+                    
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ Failed to parse AI response as JSON: {str(e)}")
+                    st.text("Raw response:")
+                    st.text(raw_output)
+                except ValueError as e:
+                    st.error(f"❌ Invalid AI response format: {str(e)}")
+                    st.text("Raw response:")
+                    st.text(raw_output)
+                    
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {str(e)}")
+                st.text("Full error details:")
+                st.text(traceback.format_exc())
 
-# === Sidebar Info ===
-with st.sidebar:
-    st.markdown("### 🔍 **About Research Lenses**")
-    st.markdown("""
-    **SME**: Expert interviews for deep technical insights
-    
-    **Peer**: Founder-to-founder conversations for startup-specific advice
-    
-    **Survey**: Structured questionnaires for quantitative validation
-    
-    **Social**: Social media sentiment analysis for organic feedback
-    """)
-    
-    st.markdown("### 📊 **Startup Stages**")
-    for stage_name in STARTUP_STAGES.keys():
-        st.markdown(f"• **{stage_name}**")
-    
-    st.markdown("---")
-    st.markdown("*Powered by AWS Bedrock Nova Micro*")
+if __name__ == "__main__":
+    main()
