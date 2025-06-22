@@ -17,7 +17,13 @@ st.set_page_config(
 @st.cache_resource
 def get_api_key():
     try:
-        # Look for .env file in current directory
+        # First try Streamlit secrets (for deployment)
+        if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+            api_key = st.secrets['ANTHROPIC_API_KEY']
+            if api_key and api_key.strip():
+                return api_key.strip()
+        
+        # Fallback to .env file (for local development)
         env_path = Path(".env")
         if env_path.exists():
             env_content = toml.load(env_path)
@@ -25,9 +31,9 @@ def get_api_key():
             if api_key and api_key.strip():
                 return api_key.strip()
     except Exception as e:
-        st.error(f"Error reading .env as TOML: {e}")
+        st.error(f"Error reading API key: {e}")
     
-    raise Exception("API key not found in .env file")
+    raise Exception("API key not found. Please add ANTHROPIC_API_KEY to Streamlit secrets or .env file")
 
 # Initialize Anthropic client
 @st.cache_resource
@@ -298,7 +304,8 @@ def main():
     client = get_anthropic_client()
     
     if not client:
-        st.error("❌ Failed to initialize Anthropic client. Please check your .env file.")
+        st.error("❌ Failed to initialize Anthropic client. Please add ANTHROPIC_API_KEY to Streamlit secrets.")
+        st.info("💡 In Streamlit Cloud: Go to App Settings → Secrets → Add your API key as ANTHROPIC_API_KEY")
         st.stop()
     
     st.success("✅ Anthropic client initialized successfully")
