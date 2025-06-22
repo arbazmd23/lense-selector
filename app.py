@@ -8,7 +8,7 @@ import traceback
 
 # Configure page
 st.set_page_config(
-    page_title="INLAW Research Lens Selector",
+    page_title="OUTLAW Research Lens Selector",
     page_icon="🔍",
     layout="wide"
 )
@@ -18,10 +18,10 @@ st.set_page_config(
 def get_api_key():
     try:
         # First try Streamlit secrets (for deployment)
-        if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+        if 'ANTHROPIC_API_KEY' in st.secrets:
             api_key = st.secrets['ANTHROPIC_API_KEY']
-            if api_key and api_key.strip():
-                return api_key.strip()
+            if api_key and str(api_key).strip():
+                return str(api_key).strip()
         
         # Fallback to .env file (for local development)
         env_path = Path(".env")
@@ -297,7 +297,7 @@ def query_claude(prompt_text: str, client):
 
 # === Streamlit UI ===
 def main():
-    st.title("🔍 INLAW Research Lens Selector")
+    st.title("🔍 OUTLAW Research Lens Selector")
     st.markdown("**Version 1.0.0** - Analyze your startup and get research lens recommendations")
     
     # Initialize client
